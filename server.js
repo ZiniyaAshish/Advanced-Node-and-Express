@@ -74,7 +74,8 @@ app.route('/').get((req, res) => {
   res.render('index', {
     title: 'Connected to Database',
     message: 'Please login',
-    showLogin: true
+    showLogin: true,
+    showRegistration: true
   });
 });
 
@@ -85,6 +86,59 @@ app.route('/login').post(
   }
 );
 
+// Protected profile route
+app.get('/profile', ensureAuthenticated, (req, res) => {
+  res.render('profile', { username: req.user.username });
+});
+
+app.route('/logout')
+  .get((req, res) => {
+    req.logout();
+    res.redirect('/');
+  });
+
+app.route('/register')
+  .post((req, res, next) => {
+    myDataBase.collection('users').findOne({ username: req.body.username }, (err, user) => {
+      if (err) {
+        console.error("Error finding user:", err);
+        return next(err);
+      }
+      if (user) {
+        // User already exists
+        console.log("User already exists:", req.body.username);
+        return res.redirect('/');
+      }
+
+      // User does not exist, insert new user
+      myDataBase.collection('users').insertOne({
+        username: req.body.username,
+        password: req.body.password, // Ideally, hash the password here!
+      }, (err, result) => {
+        if (err) {
+          console.error("Error inserting user:", err);
+          return next(err);
+        }
+
+        // Pass the new user document to next middleware
+        console.log("User registered successfully:", result.ops[0]);
+        return next(null, result.ops[0]);
+      });
+    });
+  },
+    passport.authenticate('local', { failureRedirect: '/' }),
+    (req, res) => {
+      res.redirect('/profile');
+    }
+  );
+
+
+app.use((req, res, next) => {
+  res.status(404)
+    .type('text')
+    .send('Not Found');
+});
+
 // Middleware to ensure authentication
 function ensureAuthenticated(req, res, next) {
   if (req.isAuthenticated()) {
@@ -92,15 +146,6 @@ function ensureAuthenticated(req, res, next) {
   }
   res.redirect('/');
 }
-
-// Protected profile route
-app.get('/profile', (req, res) => {
-  if (req.isAuthenticated()) {
-      res.render('profile', { username: req.user.username });
-  } else {
-      res.redirect('/');
-  }
-});
 
 // Ensure this route is only used if no other routes are matched
 app.use('/public', (req, res, next) => {
