@@ -94,11 +94,12 @@ function ensureAuthenticated(req, res, next) {
 }
 
 // Protected profile route
-app.route('/profile').get(ensureAuthenticated, (req, res) => {
-  res.render('profile', {
-    title: 'Profile Page',
-    user: req.user
-  });
+app.get('/profile', (req, res) => {
+  if (req.isAuthenticated()) {
+      res.render('profile', { username: req.user.username });
+  } else {
+      res.redirect('/');
+  }
 });
 
 // Ensure this route is only used if no other routes are matched
