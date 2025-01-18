@@ -3,6 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
 const passport = require('passport');
+const bcrypt = require('bcrypt'); // Add this to require bcrypt
 const myDB = require('./connection.js');
 const { ObjectID } = require('mongodb');
 const fccTesting = require('./freeCodeCamp/fcctesting.js');
@@ -37,7 +38,10 @@ myDB(async (client) => {
       console.log(`User ${username} attempted to log in.`);
       if (err) return done(err);
       if (!user) return done(null, false);
-      if (password !== user.password) return done(null, false);
+      // Compare password with the hashed password
+      if (!bcrypt.compareSync(password, user.password)) {
+        return done(null, false);
+      }
       return done(null, user);
     });
   }));
@@ -110,10 +114,13 @@ app.route('/register')
         return res.redirect('/');
       }
 
-      // User does not exist, insert new user
+      // Hash the password before saving
+      const hash = bcrypt.hashSync(req.body.password, 12);
+
+      // User does not exist, insert new user with hashed password
       myDataBase.collection('users').insertOne({
         username: req.body.username,
-        password: req.body.password, // Ideally, hash the password here!
+        password: hash, // Save hashed password
       }, (err, result) => {
         if (err) {
           console.error("Error inserting user:", err);
@@ -126,12 +133,11 @@ app.route('/register')
       });
     });
   },
-    passport.authenticate('local', { failureRedirect: '/' }),
-    (req, res) => {
-      res.redirect('/profile');
-    }
-  );
-
+  passport.authenticate('local', { failureRedirect: '/' }),
+  (req, res) => {
+    res.redirect('/profile');
+  }
+);
 
 app.use((req, res, next) => {
   res.status(404)
