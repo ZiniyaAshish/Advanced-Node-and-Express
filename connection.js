@@ -2,14 +2,17 @@
 require('dotenv').config();
 const { MongoClient } = require('mongodb');
 
-async function main(callback) {
+async function myDB(callback) {
     const URI = process.env.MONGO_URI; // Declare MONGO_URI in your .env file
     const client = new MongoClient(URI, { useNewUrlParser: true, useUnifiedTopology: true });
 
     try {
         // Connect to the MongoDB cluster
-        await client.connect();
-
+        await client.connect().then(
+            () => {
+                console.log('Connected to MongoDB');
+            }
+        );
         // Make the appropriate DB calls
         await callback(client);
 
@@ -20,4 +23,4 @@ async function main(callback) {
     }
 }
 
-module.exports = main;
+module.exports = myDB;
