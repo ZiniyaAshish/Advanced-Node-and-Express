@@ -1,11 +1,14 @@
+doctype html
 html
   head
-    title FCC Advanced Node and Express
+    title Chat
     meta(name='description', content='Home page')
     meta(charset='utf-8')
     meta(http-equiv='X-UA-Compatible', content='IE=edge')
     meta(name='viewport', content='width=device-width, initial-scale=1')
     link(rel='stylesheet', href='/public/style.css')
+    script(src="https://cdn.socket.io/4.0.0/socket.io.min.js")
+    script(src="/public/client.js")
   body
     h1.border.center FCC Advanced Node and Express
     h2.center Socket.IO Chat Room

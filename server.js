@@ -1,14 +1,22 @@
 'use strict';
 require('dotenv').config();
 const express = require('express');
+const app = express();
 const session = require('express-session');
+const MongoStore = require('connect-mongo')(session);
 const passport = require('passport');
+const http = require('http').createServer(app); // Create HTTP server
+const io = require('socket.io')(http);
 const bcrypt = require('bcrypt'); // Add this to require bcrypt
 const myDB = require('./connection.js');
+const routes = require('./routes.js');
 const { ObjectID } = require('mongodb');
 const fccTesting = require('./freeCodeCamp/fcctesting.js');
+const passportSocketIo = require('passport.socketio');
+const cookieParser = require('cookie-parser');
 
-const app = express();
+const URI = process.env.MONGO_URI;
+const store = new MongoStore({ url: URI });
 
 fccTesting(app);
 app.use('/public', express.static(process.cwd() + '/public'));
@@ -24,55 +32,10 @@ app.use(session({
 
 app.use(passport.initialize());
 app.use(passport.session());
+app.use(cookieParser());
 
 app.set('view engine', 'pug');
 app.set('views', './views/pug');
-
-const LocalStrategy = require('passport-local');
-
-myDB(async (client) => {
-  const myDataBase = await client.db('test');
-
-  passport.use(new LocalStrategy((username, password, done) => {
-    myDataBase.findOne({ username: username }, (err, user) => {
-      console.log(`User ${username} attempted to log in.`);
-      if (err) return done(err);
-      if (!user) return done(null, false);
-      // Compare password with the hashed password
-      if (!bcrypt.compareSync(password, user.password)) {
-        return done(null, false);
-      }
-      return done(null, user);
-    });
-  }));
-
-  app.route('/').get((req, res) => {
-    res.render('index', {
-      title: 'Connected to Database',
-      message: 'Please login'
-    });
-  });
-
-  // Serialization and deserialization here...
-  passport.serializeUser((user, done) => {
-    done(null, user._id);
-  });
-
-  passport.deserializeUser((id, done) => {
-    myDataBase.collection('users').findOne({ _id: new ObjectID(id) }, (err, doc) => {
-      if (err) {
-        console.error(err);
-        return done(err, null);
-      }
-      done(null, doc);
-    });
-  });
-}).catch(e => {
-  console.error('Database connection failed:', e);
-  app.route('/').get((req, res) => {
-    res.render('index', { title: e.message, message: 'Unable to connect to database' });
-  });
-});
 
 app.route('/').get((req, res) => {
   res.render('index', {
@@ -83,81 +46,85 @@ app.route('/').get((req, res) => {
   });
 });
 
-app.route('/login').post(
-  passport.authenticate('local', { failureRedirect: '/' }),
-  (req, res) => {
-    res.redirect('/profile');
+const LocalStrategy = require('passport-local');
+const auth = require('./auth.js');
+
+let currentUsers = 0;
+
+myDB(async (client) => {
+  const myDataBase = await client.db('test');
+
+  function onAuthorizeSuccess(data, accept) {
+    console.log('successful connection to socket.io');
+
+    accept(null, true);
   }
-);
 
-// Protected profile route
-app.get('/profile', ensureAuthenticated, (req, res) => {
-  res.render('profile', { username: req.user.username });
-});
+  function onAuthorizeFail(data, message, error, accept) {
+    if (error) throw new Error(message);
+    console.log('failed connection to socket.io:', message);
+    accept(null, false);
+  }
 
-app.route('/logout')
-  .get((req, res) => {
-    req.logout();
+  auth(app, myDataBase);
+  routes(app, (req, res, next) => {
+    if (req.isAuthenticated()) return next();
     res.redirect('/');
   });
 
-app.route('/register')
-  .post((req, res, next) => {
-    myDataBase.collection('users').findOne({ username: req.body.username }, (err, user) => {
-      if (err) {
-        console.error("Error finding user:", err);
-        return next(err);
-      }
-      if (user) {
-        // User already exists
-        console.log("User already exists:", req.body.username);
-        return res.redirect('/');
-      }
+  io.on('connection', socket => {
+    console.log('A user has connected');
+    console.log('user ' + socket.request.user.username + ' connected'); // Log the connected user's username
 
-      // Hash the password before saving
-      const hash = bcrypt.hashSync(req.body.password, 12);
+    ++currentUsers; // Increment user count
 
-      // User does not exist, insert new user with hashed password
-      myDataBase.collection('users').insertOne({
-        username: req.body.username,
-        password: hash, // Save hashed password
-      }, (err, result) => {
-        if (err) {
-          console.error("Error inserting user:", err);
-          return next(err);
-        }
+    io.emit('user', {
+      username: socket.request.user.username,
+      currentUsers,
+      connected: true
+    });
 
-        // Pass the new user document to next middleware
-        console.log("User registered successfully:", result.ops[0]);
-        return next(null, result.ops[0]);
+    socket.on('chat message', (message) => {
+      // Emit the 'chat message' event to all clients with username and message
+      io.emit('chat message', {
+        username: socket.request.user.username,
+        message: message
       });
     });
-  },
-  passport.authenticate('local', { failureRedirect: '/' }),
-  (req, res) => {
-    res.redirect('/profile');
-  }
-);
 
-app.use((req, res, next) => {
-  res.status(404)
-    .type('text')
-    .send('Not Found');
+    // Listen for disconnect event
+    socket.on('disconnect', () => {
+      console.log('A user has disconnected');
+      --currentUsers; // Decrease user count
+      io.emit('user count', currentUsers); // Emit the updated user count to all clients
+    });
+  });
+
+  io.use(
+    passportSocketIo.authorize({
+      cookieParser: cookieParser, // Use cookieParser for reading cookies
+      key: 'express.sid', // The name of the session cookie
+      secret: process.env.SESSION_SECRET, // Session secret for signing cookies
+      store: store, // Use MongoStore session store
+      success: onAuthorizeSuccess, // Success callback
+      fail: onAuthorizeFail // Failure callback
+    })
+  );
+
+  app.use(session({
+    secret: process.env.SESSION_SECRET, // Use your session secret here
+    resave: false, // Don't resave sessions if not modified
+    saveUninitialized: false, // Don't save uninitialized sessions
+    store: store, // Use MongoStore session store
+    cookie: { secure: process.env.NODE_ENV === 'production' } // Use secure cookies in production
+  }));
+}).catch(e => {
+  console.error('Database connection failed:', e);
+  app.route('/').get((req, res) => {
+    res.render('index', { title: e.message, message: 'Unable to connect to database' });
+  });
 });
 
-// Middleware to ensure authentication
-function ensureAuthenticated(req, res, next) {
-  if (req.isAuthenticated()) {
-    return next();
-  }
-  res.redirect('/');
-}
-
-// Ensure this route is only used if no other routes are matched
-app.use('/public', (req, res, next) => {
-  console.log(`Static file requested: ${req.url}`);
-  next();
-}, express.static(process.cwd() + '/public'));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
